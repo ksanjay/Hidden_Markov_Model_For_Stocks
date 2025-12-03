@@ -84,7 +84,9 @@
                     <div id="loader" class="loader hidden"></div>
                 </button>
             </div>
-            <p class="text-xs text-slate-500">Data provided by Marketstack API (EOD). Analysis requires ~250 historical data points.</p>
+            <p class="text-xs text-slate-500">
+                <span id="sourceIndicator">Data Sources: Marketstack &rarr; FMP &rarr; Finnhub &rarr; AlphaVantage</span>
+            </p>
         </div>
 
         <!-- Error Message -->
@@ -98,7 +100,10 @@
             <!-- Visualization Canvas -->
             <div class="relative w-full h-48 bg-slate-900 border-b border-slate-700">
                 <canvas id="chartCanvas" class="w-full h-full"></canvas>
-                <div class="absolute top-2 left-2 text-xs text-slate-500 mono">PRICE HISTORY (LAST 250 DAYS)</div>
+                <div class="absolute top-2 left-2 text-xs text-slate-500 mono flex gap-4">
+                    <span>PRICE HISTORY (LAST 250 DAYS)</span>
+                    <span id="activeSourceBadge" class="text-blue-400 font-bold"></span>
+                </div>
             </div>
 
             <div class="p-6">
@@ -225,11 +230,15 @@
     </div>
 
     <script>
-        // Configuration
-        const API_KEY = 'adc91e9b5f1decaabf6d74dc20a4416f';
-        const BASE_URL = 'https://api.marketstack.com/v1/eod';
+        // --- API CONFIGURATION ---
+        const KEYS = {
+            MARKETSTACK: 'adc91e9b5f1decaabf6d74dc20a4416f',
+            FMP: 'zZ5zECyopZEcPtKvkqlb1R52jv2vFusj',
+            FINNHUB: 'd22igc9r01qr7ajlkob0d22igc9r01qr7ajlkobg',
+            ALPHAVANTAGE: 'JQQUUJQRAX8TLXSM'
+        };
 
-        // DOM Elements
+        // --- DOM Elements ---
         const tickerInput = document.getElementById('tickerInput');
         const assessBtn = document.getElementById('assessBtn');
         const btnText = document.getElementById('btnText');
@@ -238,6 +247,7 @@
         const errorBox = document.getElementById('errorBox');
         const errorMsg = document.getElementById('errorMsg');
         const canvas = document.getElementById('chartCanvas');
+        const activeSourceBadge = document.getElementById('activeSourceBadge');
 
         // Strategy DOM Elements
         const stratSizing = document.getElementById('stratSizing');
@@ -248,8 +258,9 @@
         const actionToday = document.getElementById('actionToday');
         const actionTomorrow = document.getElementById('actionTomorrow');
 
-        // State
         let ctx = canvas.getContext('2d');
+
+        // --- MAIN LOGIC ---
 
         async function assessRisk() {
             const ticker = tickerInput.value.trim().toUpperCase();
@@ -259,10 +270,12 @@
             hideError();
             setLoading(true);
             resultsArea.classList.add('hidden');
+            activeSourceBadge.innerText = '';
 
             try {
-                // 1. Data Acquisition
-                const data = await fetchStockData(ticker);
+                // 1. Data Acquisition (Cascading Fallback)
+                const { source, data } = await fetchStockDataWithFallback(ticker);
+                activeSourceBadge.innerText = `[SOURCE: ${source}]`;
                 
                 // 2. Data Processing (Log Returns & Volatility)
                 const processedData = processData(data);
@@ -275,34 +288,134 @@
 
             } catch (err) {
                 console.error(err);
-                showError(err.message || "Failed to analyze data. Please check the ticker or API limits.");
+                showError(err.message || "Failed to analyze data. All data sources exhausted.");
             } finally {
                 setLoading(false);
             }
         }
 
-        async function fetchStockData(ticker) {
-            const url = `${BASE_URL}?access_key=${API_KEY}&symbols=${ticker}&limit=250`;
-            const response = await fetch(url);
-            
-            if (!response.ok) {
-                if(response.status === 429) throw new Error("API Limit Reached. Please try again later.");
-                if(response.status === 401) throw new Error("API Key Invalid or Plan Restriction (HTTPS).");
-                throw new Error(`API Error: ${response.statusText}`);
+        // --- DATA ACQUISITION LAYER ---
+
+        async function fetchStockDataWithFallback(ticker) {
+            let errors = [];
+
+            // Attempt 1: Marketstack
+            try {
+                console.log('Attempting Marketstack...');
+                const data = await fetchMarketstack(ticker);
+                return { source: 'Marketstack', data };
+            } catch (e) {
+                console.warn('Marketstack failed:', e);
+                errors.push(`Marketstack: ${e.message}`);
             }
 
-            const json = await response.json();
-            
-            if (!json.data || json.data.length === 0) {
-                throw new Error(`No data found for symbol: ${ticker}`);
+            // Attempt 2: Financial Modeling Prep
+            try {
+                console.log('Attempting FMP...');
+                const data = await fetchFMP(ticker);
+                return { source: 'FMP', data };
+            } catch (e) {
+                console.warn('FMP failed:', e);
+                errors.push(`FMP: ${e.message}`);
             }
 
-            return json.data.reverse();
+            // Attempt 3: Finnhub
+            try {
+                console.log('Attempting Finnhub...');
+                const data = await fetchFinnhub(ticker);
+                return { source: 'Finnhub', data };
+            } catch (e) {
+                console.warn('Finnhub failed:', e);
+                errors.push(`Finnhub: ${e.message}`);
+            }
+
+            // Attempt 4: AlphaVantage
+            try {
+                console.log('Attempting AlphaVantage...');
+                const data = await fetchAlphaVantage(ticker);
+                return { source: 'AlphaVantage', data };
+            } catch (e) {
+                console.warn('AlphaVantage failed:', e);
+                errors.push(`AlphaVantage: ${e.message}`);
+            }
+
+            throw new Error(`All sources failed. Details: ${errors.join(' | ')}`);
         }
 
-        function processData(rawData) {
-            const prices = rawData.map(d => d.close);
-            const dates = rawData.map(d => new Date(d.date).toLocaleDateString());
+        // 1. Marketstack Implementation
+        async function fetchMarketstack(ticker) {
+            const url = `https://api.marketstack.com/v1/eod?access_key=${KEYS.MARKETSTACK}&symbols=${ticker}&limit=250`;
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(response.statusText);
+            const json = await response.json();
+            if (!json.data || json.data.length === 0) throw new Error('No data found');
+            
+            // Format: [{date, close}, ...] sorted Oldest -> Newest
+            // Marketstack returns Newest first, so we reverse
+            return json.data.reverse().map(d => ({
+                date: d.date.split('T')[0],
+                close: d.close
+            }));
+        }
+
+        // 2. Financial Modeling Prep Implementation
+        async function fetchFMP(ticker) {
+            const url = `https://financialmodelingprep.com/api/v3/historical-price-full/${ticker}?apikey=${KEYS.FMP}`;
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(response.statusText);
+            const json = await response.json();
+            if (!json.historical || json.historical.length === 0) throw new Error('No data found');
+
+            // FMP returns Newest first. Take last 250, then reverse to get Oldest -> Newest
+            let hist = json.historical.slice(0, 250);
+            return hist.reverse().map(d => ({
+                date: d.date,
+                close: d.close
+            }));
+        }
+
+        // 3. Finnhub Implementation
+        async function fetchFinnhub(ticker) {
+            // Resolution 'D' = Day. Count 250 candles.
+            const url = `https://finnhub.io/api/v1/stock/candle?symbol=${ticker}&resolution=D&count=250&token=${KEYS.FINNHUB}`;
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(response.statusText);
+            const json = await response.json();
+            if (json.s !== 'ok' || !json.c) throw new Error('No data found');
+
+            // Finnhub returns { c: [closes], t: [timestamps] } sorted Oldest -> Newest usually
+            return json.c.map((close, i) => ({
+                date: new Date(json.t[i] * 1000).toISOString().split('T')[0],
+                close: close
+            }));
+        }
+
+        // 4. AlphaVantage Implementation
+        async function fetchAlphaVantage(ticker) {
+            const url = `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${ticker}&apikey=${KEYS.ALPHAVANTAGE}`;
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(response.statusText);
+            const json = await response.json();
+            
+            const timeSeries = json['Time Series (Daily)'];
+            if (!timeSeries) throw new Error(json['Note'] || 'No data found (Rate Limit?)');
+
+            // AV returns object with dates as keys. We need to sort them.
+            const sortedDates = Object.keys(timeSeries).sort(); // Sorts Oldest -> Newest because ISO dates sort alphabetically
+            const recentDates = sortedDates.slice(-250); // Take last 250
+
+            return recentDates.map(date => ({
+                date: date,
+                close: parseFloat(timeSeries[date]['4. close'])
+            }));
+        }
+
+        // --- PROCESSING & ANALYSIS ---
+
+        function processData(data) {
+            // Data is expected to be [{date, close}, ...] sorted Oldest -> Newest
+            const prices = data.map(d => d.close);
+            const dates = data.map(d => d.date);
             const returns = [];
 
             // Calculate Logarithmic Returns
@@ -422,6 +535,8 @@
             return advice;
         }
 
+        // --- RENDERING ---
+
         function renderResults(data, analysis) {
             resultsArea.classList.remove('hidden');
 
@@ -463,7 +578,7 @@
                 volBar.style.width = "90%";
             }
 
-            // 4. Draw Chart (Vanilla JS Canvas)
+            // 4. Draw Chart
             drawChart(data.prices, analysis.regime, analysis.trend);
         }
 
