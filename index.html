@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HMM Stock Risk Assessment & Strategy Engine</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;600&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0f172a;
+            color: #e2e8f0;
+        }
+        
+        .mono {
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1e293b; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #475569; 
+            border-radius: 4px;
+        }
+
+        .loader {
+            border: 3px solid #1e293b;
+            border-top: 3px solid #3b82f6;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .strategy-card {
+            background-color: rgba(30, 41, 59, 0.5);
+            border: 1px solid #334155;
+            transition: all 0.2s ease;
+        }
+        .strategy-card:hover {
+            border-color: #475569;
+            background-color: rgba(30, 41, 59, 0.8);
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center p-4">
+
+    <!-- Main Container -->
+    <div class="w-full max-w-4xl bg-slate-800 rounded-xl shadow-2xl border border-slate-700 overflow-hidden my-8">
+        
+        <!-- Header -->
+        <div class="bg-slate-900 p-6 border-b border-slate-700 flex justify-between items-center">
+            <div>
+                <h1 class="text-xl font-bold text-white tracking-wide">HMM Risk Assessment & Strategy Engine</h1>
+                <p class="text-slate-400 text-sm mt-1">Hidden Markov Model Simulation & Volatility Analysis</p>
+            </div>
+            <div class="h-8 w-8 bg-blue-600 rounded flex items-center justify-center font-bold text-white">
+                &Sigma;
+            </div>
+        </div>
+
+        <!-- Input Section -->
+        <div class="p-6 grid gap-4">
+            <label class="block text-sm font-medium text-slate-300">Target Asset</label>
+            <div class="flex gap-2">
+                <input type="text" id="tickerInput" placeholder="e.g. AAPL, MSFT, TSLA" 
+                    class="flex-1 bg-slate-900 border border-slate-600 text-white text-lg rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 uppercase tracking-wider mono transition-all placeholder-slate-600">
+                <button onclick="assessRisk()" id="assessBtn"
+                    class="bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg text-sm px-6 py-2.5 text-center transition-colors flex items-center gap-2">
+                    <span id="btnText">Run HMM Analysis</span>
+                    <div id="loader" class="loader hidden"></div>
+                </button>
+            </div>
+            <p class="text-xs text-slate-500">Data provided by Marketstack API (EOD). Analysis requires ~250 historical data points.</p>
+        </div>
+
+        <!-- Error Message -->
+        <div id="errorBox" class="hidden mx-6 mb-6 p-4 text-sm text-red-200 bg-red-900/50 rounded-lg border border-red-800" role="alert">
+            <span class="font-medium">Error:</span> <span id="errorMsg"></span>
+        </div>
+
+        <!-- Results Section (Hidden by default) -->
+        <div id="resultsArea" class="hidden border-t border-slate-700 bg-slate-800/50">
+            
+            <!-- Visualization Canvas -->
+            <div class="relative w-full h-48 bg-slate-900 border-b border-slate-700">
+                <canvas id="chartCanvas" class="w-full h-full"></canvas>
+                <div class="absolute top-2 left-2 text-xs text-slate-500 mono">PRICE HISTORY (LAST 250 DAYS)</div>
+            </div>
+
+            <div class="p-6">
+                <!-- Regime Indicator -->
+                <div class="flex flex-col md:flex-row gap-6 mb-6">
+                    <div class="flex-1">
+                        <h2 class="text-sm uppercase tracking-wider text-slate-400 font-semibold mb-2">Detected Regime</h2>
+                        <div id="regimeBadge" class="inline-flex items-center px-4 py-2 rounded-md text-lg font-bold border">
+                            <!-- JS will populate -->
+                        </div>
+                        
+                        <!-- Volatility Meter -->
+                        <div class="mt-4">
+                            <div class="flex justify-between text-xs text-slate-400 mb-1">
+                                <span>Low Vol</span>
+                                <span>Current Vol: <span id="volValue" class="text-white mono"></span></span>
+                                <span>High Vol</span>
+                            </div>
+                            <div class="w-full bg-slate-700 rounded-full h-2.5">
+                                <div id="volBar" class="bg-blue-600 h-2.5 rounded-full transition-all duration-1000" style="width: 0%"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex-1 bg-slate-700/30 rounded-lg p-4 border border-slate-600">
+                        <h3 class="text-xs font-bold text-slate-300 uppercase mb-2">HMM Regime Assessment</h3>
+                        <p id="hmmDescription" class="text-sm text-slate-300 leading-relaxed">
+                            <!-- JS will populate -->
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Stats Grid -->
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 pb-6 border-b border-slate-700 mb-6">
+                    <div>
+                        <div class="text-xs text-slate-500">Latest Close</div>
+                        <div id="statPrice" class="text-lg font-mono text-white">--</div>
+                    </div>
+                    <div>
+                        <div class="text-xs text-slate-500">20-Day Volatility</div>
+                        <div id="statVol" class="text-lg font-mono text-white">--</div>
+                    </div>
+                    <div>
+                        <div class="text-xs text-slate-500">Regime Threshold (Low)</div>
+                        <div id="statThreshLow" class="text-lg font-mono text-white">--</div>
+                    </div>
+                    <div>
+                        <div class="text-xs text-slate-500">Regime Threshold (High)</div>
+                        <div id="statThreshHigh" class="text-lg font-mono text-white">--</div>
+                    </div>
+                </div>
+
+                <!-- STRATEGIC IMPLEMENTATION GRID -->
+                <h3 class="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                    <span class="text-blue-500">✦</span> Strategic Implementation
+                </h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    
+                    <!-- 1. Position Sizing -->
+                    <div class="strategy-card rounded-lg p-4">
+                        <div class="flex items-center gap-2 mb-2">
+                            <div class="w-2 h-2 rounded-full bg-indigo-500"></div>
+                            <h4 class="text-sm font-semibold text-slate-200">Position Sizing</h4>
+                        </div>
+                        <p id="stratSizing" class="text-sm text-slate-400 leading-relaxed">--</p>
+                    </div>
+
+                    <!-- 2. Options Strategy -->
+                    <div class="strategy-card rounded-lg p-4">
+                        <div class="flex items-center gap-2 mb-2">
+                            <div class="w-2 h-2 rounded-full bg-purple-500"></div>
+                            <h4 class="text-sm font-semibold text-slate-200">Options Strategy</h4>
+                        </div>
+                        <p id="stratOptions" class="text-sm text-slate-400 leading-relaxed">--</p>
+                    </div>
+
+                    <!-- 3. Systematic Signals -->
+                    <div class="strategy-card rounded-lg p-4">
+                        <div class="flex items-center gap-2 mb-2">
+                            <div class="w-2 h-2 rounded-full bg-emerald-500"></div>
+                            <h4 class="text-sm font-semibold text-slate-200">Systematic Signal</h4>
+                        </div>
+                        <p id="stratSignal" class="text-sm text-slate-400 leading-relaxed">--</p>
+                    </div>
+
+                    <!-- 4. Regime Transition -->
+                    <div class="strategy-card rounded-lg p-4">
+                        <div class="flex items-center gap-2 mb-2">
+                            <div class="w-2 h-2 rounded-full bg-orange-500"></div>
+                            <h4 class="text-sm font-semibold text-slate-200">Transition Logic</h4>
+                        </div>
+                        <p id="stratTransition" class="text-sm text-slate-400 leading-relaxed">--</p>
+                    </div>
+
+                    <!-- 5. Cross Asset Hedging -->
+                    <div class="strategy-card rounded-lg p-4">
+                        <div class="flex items-center gap-2 mb-2">
+                            <div class="w-2 h-2 rounded-full bg-pink-500"></div>
+                            <h4 class="text-sm font-semibold text-slate-200">Hedging</h4>
+                        </div>
+                        <p id="stratHedge" class="text-sm text-slate-400 leading-relaxed">--</p>
+                    </div>
+
+                    <!-- 6. Action Plan -->
+                    <div class="strategy-card rounded-lg p-4 border-l-4 border-l-blue-500">
+                        <div class="flex items-center gap-2 mb-2">
+                            <h4 class="text-sm font-bold text-white">Daily Action Plan</h4>
+                        </div>
+                        <div class="space-y-2">
+                            <div>
+                                <span class="text-xs text-slate-500 uppercase font-bold">Today</span>
+                                <p id="actionToday" class="text-sm text-slate-300">--</p>
+                            </div>
+                            <div class="pt-2 border-t border-slate-700">
+                                <span class="text-xs text-slate-500 uppercase font-bold">Tomorrow</span>
+                                <p id="actionTomorrow" class="text-sm text-slate-300">--</p>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const API_KEY = 'adc91e9b5f1decaabf6d74dc20a4416f';
+        const BASE_URL = 'https://api.marketstack.com/v1/eod';
+
+        // DOM Elements
+        const tickerInput = document.getElementById('tickerInput');
+        const assessBtn = document.getElementById('assessBtn');
+        const btnText = document.getElementById('btnText');
+        const loader = document.getElementById('loader');
+        const resultsArea = document.getElementById('resultsArea');
+        const errorBox = document.getElementById('errorBox');
+        const errorMsg = document.getElementById('errorMsg');
+        const canvas = document.getElementById('chartCanvas');
+
+        // Strategy DOM Elements
+        const stratSizing = document.getElementById('stratSizing');
+        const stratOptions = document.getElementById('stratOptions');
+        const stratSignal = document.getElementById('stratSignal');
+        const stratTransition = document.getElementById('stratTransition');
+        const stratHedge = document.getElementById('stratHedge');
+        const actionToday = document.getElementById('actionToday');
+        const actionTomorrow = document.getElementById('actionTomorrow');
+
+        // State
+        let ctx = canvas.getContext('2d');
+
+        async function assessRisk() {
+            const ticker = tickerInput.value.trim().toUpperCase();
+            if (!ticker) return showError("Please enter a valid ticker symbol.");
+
+            // Reset UI
+            hideError();
+            setLoading(true);
+            resultsArea.classList.add('hidden');
+
+            try {
+                // 1. Data Acquisition
+                const data = await fetchStockData(ticker);
+                
+                // 2. Data Processing (Log Returns & Volatility)
+                const processedData = processData(data);
+                
+                // 3. Regime Determination (HMM Simulation)
+                const analysis = determineRegime(processedData);
+
+                // 4. Output Display
+                renderResults(processedData, analysis);
+
+            } catch (err) {
+                console.error(err);
+                showError(err.message || "Failed to analyze data. Please check the ticker or API limits.");
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        async function fetchStockData(ticker) {
+            const url = `${BASE_URL}?access_key=${API_KEY}&symbols=${ticker}&limit=250`;
+            const response = await fetch(url);
+            
+            if (!response.ok) {
+                if(response.status === 429) throw new Error("API Limit Reached. Please try again later.");
+                if(response.status === 401) throw new Error("API Key Invalid or Plan Restriction (HTTPS).");
+                throw new Error(`API Error: ${response.statusText}`);
+            }
+
+            const json = await response.json();
+            
+            if (!json.data || json.data.length === 0) {
+                throw new Error(`No data found for symbol: ${ticker}`);
+            }
+
+            return json.data.reverse();
+        }
+
+        function processData(rawData) {
+            const prices = rawData.map(d => d.close);
+            const dates = rawData.map(d => new Date(d.date).toLocaleDateString());
+            const returns = [];
+
+            // Calculate Logarithmic Returns
+            for (let i = 1; i < prices.length; i++) {
+                const logReturn = Math.log(prices[i] / prices[i - 1]);
+                returns.push(logReturn);
+            }
+
+            return {
+                prices: prices.slice(1),
+                dates: dates.slice(1),
+                returns: returns
+            };
+        }
+
+        function determineRegime(data) {
+            const returns = data.returns;
+            const windowSize = 20;
+            const volatilities = [];
+
+            // Calculate rolling standard deviation
+            for (let i = 0; i <= returns.length - windowSize; i++) {
+                const windowSlice = returns.slice(i, i + windowSize);
+                const mean = windowSlice.reduce((a, b) => a + b, 0) / windowSize;
+                const variance = windowSlice.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / windowSize;
+                const stdDev = Math.sqrt(variance);
+                volatilities.push(stdDev);
+            }
+
+            if (volatilities.length === 0) throw new Error("Insufficient data for volatility calculation.");
+
+            const currentVol = volatilities[volatilities.length - 1];
+            
+            // Trend Calculation for signals (Simple Moving Average vs Price)
+            const currentPrice = data.prices[data.prices.length - 1];
+            const ma20 = data.prices.slice(-20).reduce((a,b) => a+b, 0) / 20;
+            const trend = currentPrice > ma20 ? 'UP' : 'DOWN';
+
+            // Thresholds
+            const sortedVols = [...volatilities].sort((a, b) => a - b);
+            const lowThreshold = sortedVols[Math.floor(sortedVols.length * 0.33)];
+            const highThreshold = sortedVols[Math.floor(sortedVols.length * 0.66)];
+
+            let regime = 2;
+            let regimeName = "Mid Volatility";
+            let description = "";
+
+            if (currentVol <= lowThreshold) {
+                regime = 1;
+                regimeName = "Low Volatility (State 1)";
+                description = "HMM Prediction: State 1 indicates a stable, low-variance environment. Returns are clustered tightly. This is typically conducive to steady trends.";
+            } else if (currentVol >= highThreshold) {
+                regime = 3;
+                regimeName = "High Volatility (State 3)";
+                description = "HMM Prediction: State 3 indicates a high-variance, 'fat-tail' environment. Extreme moves (up or down) are significantly more likely.";
+            } else {
+                regime = 2;
+                regimeName = "Mid Volatility (State 2)";
+                description = "HMM Prediction: State 2 represents a transitional or 'noisy' environment. Risk is moderate, but directional conviction is lower than State 1.";
+            }
+
+            // Get Strategic Advice
+            const strategies = getStrategicAdvice(regime, trend, currentVol, lowThreshold, highThreshold);
+
+            return {
+                currentVol,
+                lowThreshold,
+                highThreshold,
+                regime,
+                regimeName,
+                description,
+                allVols: volatilities,
+                strategies,
+                trend
+            };
+        }
+
+        function getStrategicAdvice(regime, trend, currentVol, lowT, highT) {
+            const advice = {
+                sizing: "",
+                options: "",
+                signal: "",
+                transition: "",
+                hedge: "",
+                today: "",
+                tomorrow: ""
+            };
+
+            if (regime === 1) {
+                // LOW VOL
+                advice.sizing = "High Confidence / Full Allocation. Conditions support aggressive sizing (80-100% of target position).";
+                advice.options = "Debit Strategies. Buy Calls or Call Spreads. IV is likely cheap. Avoid selling premium as volatility expansion risk exists.";
+                advice.signal = trend === 'UP' ? "SYSTEMATIC BUY (Trend Following)" : "Accumulate / Mean Reversion Long";
+                advice.hedge = "Minimal Hedging Required. Consider 5% OTM Puts as cheap catastrophe insurance.";
+                advice.transition = "Monitor for Volatility Expansion. If Vol rises > " + (lowT * 100).toFixed(2) + "%, tighten stops.";
+                advice.today = "Deploy capital into trends. Focus on directional exposure.";
+                advice.tomorrow = "Hold positions. Watch for sudden spikes in volatility which signal regime shift.";
+            } else if (regime === 2) {
+                // MID VOL
+                advice.sizing = "Moderate Allocation (50-60%). Reduce leverage. Keep dry powder for clearer signals.";
+                advice.options = "Neutral / Income. Iron Condors or Calendar Spreads to harvest theta. Directional edge is weak.";
+                advice.signal = "Hold / Range Trade. Avoid breakouts as false signals are common in Regime 2.";
+                advice.hedge = "Sector Diversification. Rotate into Defensive Sectors (Utils, Staples) if trend weakens.";
+                advice.transition = `Boundary Watch. Nearer to State ${currentVol < ((lowT+highT)/2) ? '1 (Low)' : '3 (High)'}. Adjust beta accordingly.`;
+                advice.today = "Take profits on extensions. Buy support, sell resistance.";
+                advice.tomorrow = "Wait for a break of the 20-day high/low to confirm next directional leg.";
+            } else {
+                // HIGH VOL
+                advice.sizing = "Defensive / Cash Heavy (0-30%). Capital preservation is priority. Wide stops required, so size down.";
+                advice.options = "Defined Risk Only. Spreads or Long Puts. Implied Volatility is expensive—selling premium is profitable but dangerous.";
+                advice.signal = trend === 'DOWN' ? "SYSTEMATIC SHORT / EXIT" : "High Risk Speculative Long (V-Bottom hunting)";
+                advice.hedge = "Maximum Protection. Long USD, Gold, or Volatility (VIX) products. Move to Cash.";
+                advice.transition = "Watch for 'Vol Crush'. If volatility drops significantly, it signals panic is subsiding.";
+                advice.today = "Reduce exposure immediately. Do not average down on losers.";
+                advice.tomorrow = "Stay flat/hedged until Volatility drops below " + (highT * 100).toFixed(2) + "%.";
+            }
+            return advice;
+        }
+
+        function renderResults(data, analysis) {
+            resultsArea.classList.remove('hidden');
+
+            // 1. Text Content
+            document.getElementById('hmmDescription').innerText = analysis.description;
+            document.getElementById('statPrice').innerText = data.prices[data.prices.length - 1].toFixed(2);
+            document.getElementById('statVol').innerText = (analysis.currentVol * 100).toFixed(2) + '%';
+            document.getElementById('statThreshLow').innerText = (analysis.lowThreshold * 100).toFixed(2) + '%';
+            document.getElementById('statThreshHigh').innerText = (analysis.highThreshold * 100).toFixed(2) + '%';
+            document.getElementById('volValue').innerText = (analysis.currentVol * 100).toFixed(2) + '%';
+
+            // 2. Strategic Cards
+            stratSizing.innerText = analysis.strategies.sizing;
+            stratOptions.innerText = analysis.strategies.options;
+            stratSignal.innerText = analysis.strategies.signal;
+            stratTransition.innerText = analysis.strategies.transition;
+            stratHedge.innerText = analysis.strategies.hedge;
+            actionToday.innerText = analysis.strategies.today;
+            actionTomorrow.innerText = analysis.strategies.tomorrow;
+
+            // 3. Regime Badge Styling
+            const badge = document.getElementById('regimeBadge');
+            badge.innerText = analysis.regimeName;
+            badge.className = "inline-flex items-center px-4 py-2 rounded-md text-lg font-bold border transition-colors duration-500";
+            
+            const volBar = document.getElementById('volBar');
+
+            if (analysis.regime === 1) {
+                badge.classList.add('bg-green-900/30', 'text-green-400', 'border-green-800');
+                volBar.className = "bg-green-500 h-2.5 rounded-full transition-all duration-1000";
+                volBar.style.width = "20%";
+            } else if (analysis.regime === 2) {
+                badge.classList.add('bg-yellow-900/30', 'text-yellow-400', 'border-yellow-800');
+                volBar.className = "bg-yellow-500 h-2.5 rounded-full transition-all duration-1000";
+                volBar.style.width = "50%";
+            } else {
+                badge.classList.add('bg-red-900/30', 'text-red-400', 'border-red-800');
+                volBar.className = "bg-red-500 h-2.5 rounded-full transition-all duration-1000";
+                volBar.style.width = "90%";
+            }
+
+            // 4. Draw Chart (Vanilla JS Canvas)
+            drawChart(data.prices, analysis.regime, analysis.trend);
+        }
+
+        function drawChart(prices, regime, trend) {
+            canvas.width = canvas.parentElement.offsetWidth;
+            canvas.height = canvas.parentElement.offsetHeight;
+            
+            const width = canvas.width;
+            const height = canvas.height;
+            const padding = 20;
+
+            ctx.clearRect(0, 0, width, height);
+
+            const maxPrice = Math.max(...prices);
+            const minPrice = Math.min(...prices);
+            const range = maxPrice - minPrice;
+
+            const getY = (price) => height - padding - ((price - minPrice) / range) * (height - 2 * padding);
+            const getX = (index) => padding + (index / (prices.length - 1)) * (width - 2 * padding);
+
+            let strokeStyle = '#3b82f6'; 
+            if(regime === 1) strokeStyle = '#4ade80'; 
+            if(regime === 3) strokeStyle = '#f87171'; 
+
+            ctx.beginPath();
+            ctx.moveTo(getX(0), getY(prices[0]));
+            
+            for (let i = 1; i < prices.length; i++) {
+                ctx.lineTo(getX(i), getY(prices[i]));
+            }
+
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = strokeStyle;
+            ctx.stroke();
+
+            // Fill Gradient
+            ctx.lineTo(getX(prices.length - 1), height);
+            ctx.lineTo(getX(0), height);
+            ctx.closePath();
+            
+            const gradient = ctx.createLinearGradient(0, 0, 0, height);
+            gradient.addColorStop(0, strokeStyle + '33'); 
+            gradient.addColorStop(1, strokeStyle + '00'); 
+            
+            ctx.fillStyle = gradient;
+            ctx.fill();
+
+            // Overlay Trend Line (Simple 2pt line for visual flair of trend)
+            ctx.beginPath();
+            ctx.moveTo(getX(0), getY(prices[0]));
+            ctx.lineTo(getX(prices.length-1), getY(prices[prices.length-1]));
+            ctx.strokeStyle = trend === 'UP' ? 'rgba(74, 222, 128, 0.3)' : 'rgba(248, 113, 113, 0.3)';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([5, 5]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        function setLoading(isLoading) {
+            if (isLoading) {
+                btnText.classList.add('hidden');
+                loader.classList.remove('hidden');
+                assessBtn.disabled = true;
+                assessBtn.classList.add('opacity-75', 'cursor-not-allowed');
+            } else {
+                btnText.classList.remove('hidden');
+                loader.classList.add('hidden');
+                assessBtn.disabled = false;
+                assessBtn.classList.remove('opacity-75', 'cursor-not-allowed');
+            }
+        }
+
+        function showError(msg) {
+            errorMsg.innerText = msg;
+            errorBox.classList.remove('hidden');
+        }
+
+        function hideError() {
+            errorBox.classList.add('hidden');
+        }
+
+        tickerInput.addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') {
+                assessRisk();
+            }
+        });
+    </script>
+</body>
+</html>
